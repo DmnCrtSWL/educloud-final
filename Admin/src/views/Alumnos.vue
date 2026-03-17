@@ -1,418 +1,473 @@
 <script setup lang="ts">
-import { ref } from "vue";
+import { ref, onMounted, watch } from "vue";
 import AdminLayout from "../components/layout/AdminLayout.vue";
-import { parseCurp } from "../utils/curpTools";
+import AsistenteIA from "../components/AsistenteIA.vue";
+import { useAuth, authHeaders } from "../composables/useAuth";
+import { useGroupState } from "../composables/useGroupState";
 
-const step = ref<"list" | "upload" | "review" | "done">("list");
-const isDragging = ref(false);
-
-interface DraftStudent {
+interface Alumno {
   id: string;
-  name: string;
+  nombre: string;
   curp: string;
+  created_at: string;
+  num_lista: number;
+  grupo_grado?: number;
+  grupo_letra?: string;
+  estatus: string;
 }
 
-const draftStudents = ref<DraftStudent[]>([]);
-
-// Generar ID EDU-XXX-XXX
-const generateId = () => {
-  const p1 = Math.floor(Math.random() * 900) + 100;
-  const p2 = Math.floor(Math.random() * 900) + 100;
-  return `EDU-${p1}-${p2}`;
+const getGradoSugerido = (curp: string) => {
+  if (!curp || curp.length < 16) return "Desconocido";
+  const yy = parseInt(curp.substring(4, 6), 10);
+  if (isNaN(yy)) return "Desconocido";
+  const year = yy <= 26 ? 2000 + yy : 1900 + yy;
+  if (year >= 2014) return "1er Grado";
+  if (year === 2013) return "1er o 2do";
+  if (year === 2012) return "2do o 3er";
+  return "3er Grado";
 };
 
-const mockProcessFile = () => {
-  const generated: DraftStudent[] = [
-    { id: generateId(), name: "García Pérez Ana", curp: "GAPA120514MDFRRN01" },
-    {
-      id: generateId(),
-      name: "López Silva Carlos",
-      curp: "LOSC100822HDFLSR02",
-    },
-    {
-      id: generateId(),
-      name: "Rodríguez M. María",
-      curp: "ROMM130210MDFRMR03",
-    },
-    { id: generateId(), name: "Torres Luna Juan", curp: "TOLJ111111HDFTLJ04" },
-    { id: generateId(), name: "Gómez Díaz Laura", curp: "GODL130510MDFGDL05" },
-  ];
+// ─── State ───────────────────────────────────────────────────────────────────
+const alumnos = ref<Alumno[]>([]);
+const loading = ref(false);
+const error = ref<string | null>(null);
+const showAsistente = ref(false);
 
-  // Ordenar por nombre (empieza por apellido) alfabéticamente
-  generated.sort((a, b) => a.name.localeCompare(b.name));
+// ─── Delete modal ─────────────────────────────────────────────────────────────
+const deleteTarget = ref<Alumno | null>(null);
+const deleteConfirmOpen = ref(false);
+const deleting = ref(false);
 
-  draftStudents.value = generated;
-  step.value = "review";
+const openDeleteModal = (alumno: Alumno) => {
+  deleteTarget.value = alumno;
+  deleteConfirmOpen.value = true;
 };
-
-const handleFileUpload = (e: Event) => {
-  const target = e.target as HTMLInputElement;
-  if (target.files && target.files.length > 0) {
-    mockProcessFile();
+const closeDeleteModal = () => {
+  deleteTarget.value = null;
+  deleteConfirmOpen.value = false;
+};
+const confirmDelete = async () => {
+  if (!deleteTarget.value) return;
+  deleting.value = true;
+  try {
+    const res = await fetch(`http://localhost:3001/api/alumnos/${deleteTarget.value.id}`, {
+      method: "DELETE",
+      headers: authHeaders(),
+    });
+    if (res.ok) {
+      // Bote de basura = Desaparece de la lista
+      alumnos.value = alumnos.value.filter((a) => a.id !== deleteTarget.value!.id);
+      // Reasignar num_lista
+      alumnos.value = alumnos.value.map((a, i) => ({ ...a, num_lista: i + 1 }));
+    }
+  } catch {
+    await fetchAlumnos();
+  } finally {
+    deleting.value = false;
+    closeDeleteModal();
   }
 };
 
-const handleDrop = (e: DragEvent) => {
-  isDragging.value = false;
-  if (e.dataTransfer?.files && e.dataTransfer.files.length > 0) {
-    mockProcessFile();
+// ─── Edit modal ─────────────────────────────────────────────────────────────
+const editTarget = ref<Alumno | null>(null);
+const editModalOpen = ref(false);
+const editing = ref(false);
+const editError = ref<string | null>(null);
+
+const editForm = ref({
+  nombre: "",
+  curp: ""
+});
+
+const openEditModal = (alumno: Alumno) => {
+  editTarget.value = alumno;
+  editForm.value.nombre = alumno.nombre;
+  editForm.value.curp = alumno.curp;
+  editError.value = null;
+  editModalOpen.value = true;
+};
+
+const closeEditModal = () => {
+  editTarget.value = null;
+  editModalOpen.value = false;
+};
+
+const confirmEdit = async () => {
+  if (!editTarget.value) return;
+  if (!editForm.value.nombre.trim() || !editForm.value.curp.trim()) {
+    editError.value = "Nombre y CURP son requeridos.";
+    return;
+  }
+  
+  if (editForm.value.curp.trim().length !== 18) {
+    editError.value = "La CURP debe tener exactamente 18 caracteres.";
+    return;
+  }
+
+  editing.value = true;
+  editError.value = null;
+  
+  try {
+    const res = await fetch(`http://localhost:3001/api/alumnos/${editTarget.value.id}`, {
+      method: "PUT",
+      headers: { ...authHeaders(), "Content-Type": "application/json" },
+      body: JSON.stringify({
+         nombre: editForm.value.nombre,
+         curp: editForm.value.curp
+      })
+    });
+    const json = await res.json();
+    if (!res.ok) throw new Error(json.message || "Error al actualizar");
+    
+    // Update local state
+    const index = alumnos.value.findIndex(a => a.id === editTarget.value!.id);
+    if (index !== -1) {
+      alumnos.value[index].nombre = json.data.nombre;
+      alumnos.value[index].curp = json.data.curp;
+    }
+    closeEditModal();
+  } catch (err: unknown) {
+    editError.value = err instanceof Error ? err.message : "Error de conexión";
+  } finally {
+    editing.value = false;
   }
 };
 
-const saveAll = () => {
-  console.log("Guardando en lote:", draftStudents.value);
-  step.value = "done";
+const { isDocente } = useAuth();
+const { selectedGroupId } = useGroupState();
+
+// ─── Fetch ────────────────────────────────────────────────────────────────────
+const fetchAlumnos = async () => {
+  loading.value = true;
+  error.value = null;
+  alumnos.value = [];
+  try {
+    let url = "http://localhost:3001/api/alumnos";
+    
+    // Si es docente, necesita un grupo seleccionado
+    if (isDocente.value) {
+      if (!selectedGroupId.value) {
+        error.value = "Selecciona un grupo para ver sus alumnos.";
+        loading.value = false;
+        return;
+      }
+      url = `http://localhost:3001/api/grupos/${selectedGroupId.value}/enrolados`;
+    }
+
+    const res = await fetch(url, { headers: authHeaders() });
+    const json = await res.json();
+    if (!res.ok) throw new Error(json.message);
+    alumnos.value = json.data;
+  } catch {
+    error.value = "No se pudo conectar con el servidor";
+  } finally {
+    loading.value = false;
+  }
 };
 
-const reset = () => {
-  draftStudents.value = [];
-  step.value = "list";
-};
+onMounted(fetchAlumnos);
+
+// Si cambia el grupo seleccionado y es docente, volver a cargar
+watch(selectedGroupId, () => {
+  if (isDocente.value) fetchAlumnos();
+});
 </script>
 
 <template>
   <admin-layout>
     <div class="p-4 sm:p-6 lg:p-8 max-w-7xl mx-auto">
-      <!-- Encabezado de la página -->
+
+      <!-- Encabezado -->
       <div class="sm:flex sm:items-center mb-8">
         <div class="sm:flex-auto">
-          <h1 class="text-2xl font-semibold text-gray-900 dark:text-white">
-            Alumnos
-          </h1>
+          <h1 class="text-2xl font-semibold text-gray-900 dark:text-white">Alumnos</h1>
         </div>
-        <div class="mt-4 sm:ml-16 sm:mt-0 flex items-center gap-3">
+        <div v-if="!isDocente" class="mt-4 sm:ml-16 sm:mt-0 sm:flex-none flex items-center gap-3">
+          <!-- Botón cohete (Smart Import) -->
           <button
-            @click="step = 'upload'"
-            v-if="step === 'list'"
-            title="Smart Import"
-            class="flex items-center justify-center rounded-full bg-brand-100 dark:bg-brand-900/30 p-2.5 text-brand-600 dark:text-brand-400 hover:bg-brand-200 dark:hover:bg-brand-800 transition-colors"
+            title="Asistente IA"
+            @click="showAsistente = true"
+            class="flex items-center justify-center h-10 w-10 rounded-full bg-brand-500 text-white shadow-sm hover:bg-brand-600 transition-colors"
           >
-            <svg
-              class="h-5 w-5"
-              viewBox="0 0 24 24"
-              fill="none"
-              stroke="currentColor"
-              stroke-width="2"
-              stroke-linecap="round"
-              stroke-linejoin="round"
-            >
-              <path
-                d="M4.5 16.5c-1.5 1.26-2 5-2 5s3.74-.5 5-2c.71-.84.7-2.13-.09-2.91a2.18 2.18 0 0 0-2.91-.09z"
-              />
-              <path
-                d="m12 15-3-3a22 22 0 0 1 2-3.95A12.88 12.88 0 0 1 22 2c0 2.72-.78 7.5-6 11a22.35 22.35 0 0 1-4 2z"
-              />
+            <svg class="h-5 w-5" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+              <path d="M4.5 16.5c-1.5 1.26-2 5-2 5s3.74-.5 5-2c.71-.84.7-2.13-.09-2.91a2.18 2.18 0 0 0-2.91-.09z" />
+              <path d="m12 15-3-3a22 22 0 0 1 2-3.95A12.88 12.88 0 0 1 22 2c0 2.72-.78 7.5-6 11a22.35 22.35 0 0 1-4 2z" />
               <path d="M9 12H4s.55-3.03 2-4c1.62-1.08 5 0 5 0" />
               <path d="M12 15v5s3.03-.55 4-2c1.08-1.62 0-5 0-5" />
             </svg>
           </button>
           <router-link
             to="/alumnos/nuevo"
-            class="block rounded-full bg-brand-500 px-6 py-2.5 text-center text-sm font-semibold text-white shadow-sm hover:bg-brand-600 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-brand-600 transition-colors cursor-pointer"
+            class="block rounded-full bg-brand-500 px-6 py-2.5 text-center text-sm font-semibold text-white shadow-sm hover:bg-brand-600 transition-colors"
           >
             Agregar Alumno
           </router-link>
         </div>
+
       </div>
 
-      <!-- PASO 0: LIST (Empty / Default State) -->
-      <div v-if="step === 'list'" class="mt-8 flow-root">
-        <div
-          class="overflow-x-auto shadow-sm rounded-lg bg-white dark:bg-gray-800 text-center py-16 border border-gray-100 dark:border-gray-700"
-        >
-          <div
-            class="mx-auto flex h-12 w-12 items-center justify-center rounded-full bg-gray-100 dark:bg-gray-800"
-          >
-            <svg
-              class="h-6 w-6 text-gray-400"
-              fill="none"
-              viewBox="0 0 24 24"
-              stroke-width="1.5"
-              stroke="currentColor"
-            >
-              <path
-                stroke-linecap="round"
-                stroke-linejoin="round"
-                d="M15 19.128a9.38 9.38 0 0 0 2.625.372 9.337 9.337 0 0 0 4.121-.952 4.125 4.125 0 0 0-7.533-2.493M15 19.128v-.003c0-1.113-.285-2.16-.786-3.07M15 19.128v.106A12.318 12.318 0 0 1 8.624 21c-2.331 0-4.512-.645-6.374-1.766l-.001-.109a6.375 6.375 0 0 1 11.964-3.07M12 6.375a3.375 3.375 0 1 1-6.75 0 3.375 3.375 0 0 1 6.75 0Zm8.25 2.25a2.625 2.625 0 1 1-5.25 0 2.625 2.625 0 0 1 5.25 0Z"
-              />
-            </svg>
-          </div>
-          <h3 class="mt-2 text-sm font-semibold text-gray-900 dark:text-white">
-            No hay alumnos
-          </h3>
-          <p class="mt-1 text-sm text-gray-500 dark:text-gray-400">
-            Comienza agregando un alumno o usa el cohete 🚀 para importar en
-            lote.
-          </p>
-        </div>
-      </div>
-
-      <!-- PASO 1: UPLOAD -->
-      <div v-if="step === 'upload'" class="mt-8">
-        <div
-          class="flex justify-center rounded-2xl border-2 border-dashed px-6 py-24 sm:py-32 transition-colors relative"
-          :class="
-            isDragging
-              ? 'border-brand-500 bg-brand-50 dark:bg-brand-900/10'
-              : 'border-gray-300 dark:border-gray-700 bg-white dark:bg-gray-900 hover:border-brand-400 dark:hover:border-brand-500'
-          "
-          @dragover.prevent="isDragging = true"
-          @dragleave.prevent="isDragging = false"
-          @drop.prevent="handleDrop"
-        >
-          <div class="text-center">
-            <div
-              class="mx-auto flex h-20 w-20 items-center justify-center rounded-full bg-brand-50 dark:bg-brand-900/20 mb-6"
-            >
-              <svg
-                class="h-10 w-10 text-brand-600 dark:text-brand-400"
-                fill="none"
-                viewBox="0 0 24 24"
-                stroke-width="1.5"
-                stroke="currentColor"
-              >
-                <path
-                  stroke-linecap="round"
-                  stroke-linejoin="round"
-                  d="M12 16.5V9.75m0 0 3 3m-3-3-3 3M6.75 19.5a4.5 4.5 0 0 1-1.41-8.775 5.25 5.25 0 0 1 10.233-2.33 3 3 0 0 1 3.758 3.848A3.752 3.752 0 0 1 18 19.5H6.75Z"
-                />
-              </svg>
-            </div>
-            <h3
-              class="mt-2 text-xl font-semibold text-gray-900 dark:text-white"
-            >
-              Smart Import Inteligente
-            </h3>
-            <p
-              class="mt-2 text-sm leading-6 text-gray-500 dark:text-gray-400 max-w-md mx-auto"
-            >
-              Arrastra y suelta tu archivo Excel (.xlsx, .csv) o una imagen de
-              la lista de asistencia. Nuestra IA extraerá automáticamente
-              nombres y fechas sugeridas a partir del CURP.
-            </p>
-            <div
-              class="mt-8 flex justify-center text-sm leading-6 text-gray-600 dark:text-gray-400"
-            >
-              <label
-                for="file-upload"
-                class="relative cursor-pointer rounded-md bg-brand-600 px-6 py-3 font-semibold text-white focus-within:outline-none focus-within:ring-2 focus-within:ring-brand-600 focus-within:ring-offset-2 hover:bg-brand-500 transition-colors shadow-sm"
-              >
-                <span>Seleccionar archivo local</span>
-                <input
-                  id="file-upload"
-                  name="file-upload"
-                  type="file"
-                  class="sr-only"
-                  @change="handleFileUpload"
-                  accept=".xlsx,.xls,.csv,image/*"
-                />
-              </label>
-            </div>
-          </div>
-        </div>
-      </div>
-
-      <!-- PASO 2: REVIEW -->
+      <!-- Error -->
       <div
-        v-if="step === 'review'"
-        class="mt-4 animate-in fade-in slide-in-from-bottom-4 duration-500"
+        v-if="error"
+        class="mb-4 rounded-md bg-red-50 dark:bg-red-900/20 p-4 text-sm text-red-700 dark:text-red-400 border border-red-200 dark:border-red-800"
       >
-        <div
-          class="bg-white dark:bg-gray-900 shadow-sm ring-1 ring-gray-200 dark:ring-gray-800 rounded-xl overflow-hidden"
-        >
-          <div
-            class="px-4 py-4 border-b border-gray-200 dark:border-gray-800 sm:flex sm:items-center sm:justify-between bg-gray-50/50 dark:bg-gray-800/30"
-          >
-            <div class="flex items-center gap-4">
-              <span class="text-sm font-medium text-gray-700 dark:text-gray-300"
-                >Se encontraron {{ draftStudents.length }} alumnos para
-                importar.</span
-              >
-            </div>
-            <div class="mt-4 sm:mt-0 flex gap-3">
-              <button
-                @click="reset"
-                class="text-sm font-semibold leading-6 text-gray-900 dark:text-gray-300 hover:text-gray-500 py-1.5 px-3"
-              >
-                Descartar
-              </button>
-              <button
-                @click="saveAll"
-                class="rounded-md bg-brand-600 px-4 py-2 text-sm font-semibold text-white shadow-sm hover:bg-brand-500 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-brand-600"
-              >
-                Guardar alumnos
-              </button>
-            </div>
-          </div>
+        ⚠️ {{ error }}
+      </div>
 
-          <div class="overflow-x-auto">
-            <table
-              class="min-w-full divide-y divide-gray-200 dark:divide-gray-800"
-            >
-              <thead class="bg-white dark:bg-gray-900">
-                <tr>
-                  <th
-                    scope="col"
-                    class="py-3.5 pl-4 pr-3 text-left text-xs font-semibold text-gray-500 uppercase tracking-wide sm:pl-6"
-                  >
-                    ID
-                  </th>
-                  <th
-                    scope="col"
-                    class="px-3 py-3.5 text-left text-xs font-semibold text-gray-500 uppercase tracking-wide"
-                  >
-                    Nombre del Alumno
-                  </th>
-                  <th
-                    scope="col"
-                    class="px-3 py-3.5 text-left text-xs font-semibold text-gray-500 uppercase tracking-wide"
-                  >
-                    CURP
-                  </th>
-                  <th
-                    scope="col"
-                    class="px-3 py-3.5 text-center text-xs font-semibold text-gray-500 uppercase tracking-wide"
-                  >
-                    Acciones
-                  </th>
-                </tr>
-              </thead>
-              <tbody
-                class="divide-y divide-gray-200 dark:divide-gray-800 bg-white dark:bg-gray-900"
-              >
-                <tr
-                  v-for="student in draftStudents"
-                  :key="student.id"
-                  class="hover:bg-gray-50 dark:hover:bg-gray-800/50 transition-colors"
-                >
-                  <td
-                    class="whitespace-nowrap py-4 pl-4 pr-3 text-sm font-mono text-gray-500 dark:text-gray-400 sm:pl-6"
-                  >
-                    {{ student.id }}
-                  </td>
-                  <td
-                    class="whitespace-nowrap px-3 py-4 text-sm font-medium text-gray-900 dark:text-white"
-                  >
-                    {{ student.name }}
-                  </td>
-                  <td
-                    class="whitespace-nowrap px-3 py-4 text-sm font-mono text-gray-500 dark:text-gray-400"
-                  >
-                    {{ student.curp }}
-                  </td>
-                  <td
-                    class="relative whitespace-nowrap py-4 pl-3 pr-4 text-center text-sm font-medium sm:pr-6"
-                  >
-                    <div class="flex items-center justify-center gap-2">
-                      <button
-                        class="text-blue-600 hover:text-blue-900 dark:text-blue-400 dark:hover:text-blue-300 transition-colors"
-                        title="Ver"
-                      >
-                        <svg
-                          class="h-5 w-5"
-                          fill="none"
-                          viewBox="0 0 24 24"
-                          stroke-width="1.5"
-                          stroke="currentColor"
-                        >
-                          <path
-                            stroke-linecap="round"
-                            stroke-linejoin="round"
-                            d="M2.036 12.322a1.012 1.012 0 0 1 0-.639C3.423 7.51 7.36 4.5 12 4.5c4.638 0 8.573 3.007 9.963 7.178.07.207.07.431 0 .639C20.577 16.49 16.64 19.5 12 19.5c-4.638 0-8.573-3.007-9.963-7.178Z"
-                          />
-                          <path
-                            stroke-linecap="round"
-                            stroke-linejoin="round"
-                            d="M15 12a3 3 0 1 1-6 0 3 3 0 0 1 6 0Z"
-                          />
-                        </svg>
-                      </button>
-                      <button
-                        class="text-indigo-600 hover:text-indigo-900 dark:text-indigo-400 dark:hover:text-indigo-300 transition-colors"
-                        title="Editar"
-                      >
-                        <svg
-                          class="h-5 w-5"
-                          fill="none"
-                          viewBox="0 0 24 24"
-                          stroke-width="1.5"
-                          stroke="currentColor"
-                        >
-                          <path
-                            stroke-linecap="round"
-                            stroke-linejoin="round"
-                            d="m16.862 4.487 1.687-1.688a1.875 1.875 0 1 1 2.652 2.652L10.582 16.07a4.5 4.5 0 0 1-1.897 1.13L6 18l.8-2.685a4.5 4.5 0 0 1 1.13-1.897l8.932-8.931Zm0 0L19.5 7.125M18 14v4.75A2.25 2.25 0 0 1 15.75 21H5.25A2.25 2.25 0 0 1 3 18.75V8.25A2.25 2.25 0 0 1 5.25 6H10"
-                          />
-                        </svg>
-                      </button>
-                      <button
-                        class="text-red-600 hover:text-red-900 dark:text-red-400 dark:hover:text-red-300 transition-colors"
-                        title="Eliminar"
-                      >
-                        <svg
-                          class="h-5 w-5"
-                          fill="none"
-                          viewBox="0 0 24 24"
-                          stroke-width="1.5"
-                          stroke="currentColor"
-                        >
-                          <path
-                            stroke-linecap="round"
-                            stroke-linejoin="round"
-                            d="m14.74 9-.346 9m-4.788 0L9.26 9m9.968-3.21c.342.052.682.107 1.022.166m-1.022-.165L18.16 19.673a2.25 2.25 0 0 1-2.244 2.077H8.084a2.25 2.25 0 0 1-2.244-2.077L4.772 5.79m14.456 0a48.108 48.108 0 0 0-3.478-.397m-12 .562c.34-.059.68-.114 1.022-.165m0 0a48.11 48.11 0 0 1 3.478-.397m7.5 0v-.916c0-1.18-.91-2.164-2.09-2.201a51.964 51.964 0 0 0-3.32 0c-1.18.037-2.09 1.022-2.09 2.201v.916m7.5 0a48.667 48.667 0 0 0-7.5 0"
-                          />
-                        </svg>
-                      </button>
-                    </div>
-                  </td>
-                </tr>
-              </tbody>
-            </table>
-          </div>
+      <!-- Loading -->
+      <div v-if="loading" class="flex items-center justify-center py-20">
+        <svg class="animate-spin h-6 w-6 text-brand-500" fill="none" viewBox="0 0 24 24">
+          <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4" />
+          <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8v8z" />
+        </svg>
+      </div>
+
+      <!-- Empty state -->
+      <div
+        v-else-if="!loading && alumnos.length === 0 && !error"
+        class="overflow-x-auto shadow-sm rounded-lg bg-white dark:bg-gray-800 text-center py-16 border border-gray-100 dark:border-gray-700"
+      >
+        <div class="mx-auto flex h-12 w-12 items-center justify-center rounded-full bg-gray-100 dark:bg-gray-800">
+          <svg class="h-6 w-6 text-gray-400" fill="none" viewBox="0 0 24 24" stroke-width="1.5" stroke="currentColor">
+            <path stroke-linecap="round" stroke-linejoin="round" d="M15 19.128a9.38 9.38 0 0 0 2.625.372 9.337 9.337 0 0 0 4.121-.952 4.125 4.125 0 0 0-7.533-2.493M15 19.128v-.003c0-1.113-.285-2.16-.786-3.07M15 19.128v.106A12.318 12.318 0 0 1 8.624 21c-2.331 0-4.512-.645-6.374-1.766l-.001-.109a6.375 6.375 0 0 1 11.964-3.07M12 6.375a3.375 3.375 0 1 1-6.75 0 3.375 3.375 0 0 1 6.75 0Zm8.25 2.25a2.625 2.625 0 1 1-5.25 0 2.625 2.625 0 0 1 5.25 0Z" />
+          </svg>
+        </div>
+        <h3 class="mt-2 text-sm font-semibold text-gray-900 dark:text-white">No hay alumnos</h3>
+        <p v-if="isDocente" class="mt-1 text-sm text-gray-500 dark:text-gray-400">Selecciona un grupo para ver a los alumnos enrolados.</p>
+        <div v-else>
+          <p class="mt-1 text-sm text-gray-500 dark:text-gray-400">Comienza agregando un alumno.</p>
+          <router-link to="/alumnos/nuevo" class="mt-3 inline-block text-brand-500 hover:text-brand-600 text-sm font-medium">
+            Agregar el primer alumno →
+          </router-link>
         </div>
       </div>
 
-      <!-- PASO 3: DONE -->
-      <div v-if="step === 'done'" class="mt-8">
-        <div
-          class="rounded-2xl border-2 border-green-100 dark:border-green-900/50 bg-green-50 dark:bg-green-900/20 px-6 py-24 sm:py-32 text-center"
-        >
-          <div
-            class="mx-auto flex h-20 w-20 items-center justify-center rounded-full bg-green-100 dark:bg-green-800/40 mb-6"
-          >
-            <svg
-              class="h-10 w-10 text-green-600 dark:text-green-400"
-              fill="none"
-              viewBox="0 0 24 24"
-              stroke-width="1.5"
-              stroke="currentColor"
-            >
-              <path
-                stroke-linecap="round"
-                stroke-linejoin="round"
-                d="M4.5 12.75l6 6 9-13.5"
-              />
-            </svg>
-          </div>
-          <h3 class="mt-2 text-2xl font-bold text-gray-900 dark:text-white">
-            ¡Importación Exitosa!
-          </h3>
-          <p
-            class="mt-2 text-base text-gray-600 dark:text-gray-300 max-w-md mx-auto"
-          >
-            Los alumnos han sido calculados, organizados y guardados
-            exitosamente en la base de datos de la escuela.
-          </p>
-          <div class="mt-8">
-            <button
-              @click="reset"
-              class="rounded-md bg-white dark:bg-gray-800 px-6 py-3 text-sm font-semibold text-gray-900 dark:text-white shadow-sm ring-1 ring-inset ring-gray-300 dark:ring-gray-700 hover:bg-gray-50 dark:hover:bg-gray-700 transition-colors"
-            >
-              Importar otra lista
-            </button>
+      <!-- Tabla de alumnos -->
+      <div v-else-if="!loading" class="flow-root">
+        <div class="-mx-4 -my-2 overflow-x-auto sm:-mx-6 lg:-mx-8">
+          <div class="inline-block min-w-full py-2 align-middle sm:px-6 lg:px-8">
+            <div class="overflow-hidden shadow-sm rounded-lg bg-white dark:bg-gray-800">
+              <table class="min-w-full divide-y divide-gray-100 dark:divide-gray-800">
+                <thead class="bg-gray-50/50 dark:bg-gray-800/30">
+                  <tr>
+                    <th scope="col" class="py-3.5 pl-4 pr-3 text-left text-sm font-semibold text-gray-900 dark:text-gray-200 sm:pl-6 w-16">
+                      #
+                    </th>
+                    <th scope="col" class="px-3 py-3.5 text-left text-sm font-semibold text-gray-900 dark:text-gray-200">
+                      Código
+                    </th>
+                    <th scope="col" class="px-3 py-3.5 text-left text-sm font-semibold text-gray-900 dark:text-gray-200">
+                      Nombre
+                    </th>
+                    <th scope="col" class="px-3 py-3.5 text-left text-sm font-semibold text-gray-900 dark:text-gray-200">
+                      CURP
+                    </th>
+                    <th scope="col" class="px-3 py-3.5 text-left text-sm font-semibold text-gray-900 dark:text-gray-200">
+                      Grado Sugerido
+                    </th>
+                    <th scope="col" class="px-3 py-3.5 text-left text-sm font-semibold text-gray-900 dark:text-gray-200">
+                      Grupo Asignado
+                    </th>
+                    <th scope="col" class="relative py-3.5 pl-3 pr-4 sm:pr-6 text-center text-sm font-semibold text-gray-900 dark:text-gray-200">
+                      Acciones
+                    </th>
+                  </tr>
+                </thead>
+                <tbody class="divide-y divide-gray-100 dark:divide-gray-800 bg-white dark:bg-gray-900">
+                  <tr
+                    v-for="alumno in alumnos"
+                    :key="alumno.id"
+                    class="hover:bg-gray-50/50 dark:hover:bg-gray-800/30 transition-colors"
+                  >
+                    <!-- Número de lista -->
+                    <td class="whitespace-nowrap py-4 pl-4 pr-3 text-sm font-semibold text-gray-400 dark:text-gray-500 sm:pl-6">
+                      {{ alumno.num_lista }}
+                    </td>
+                    <!-- Código EDU-XXX-XXX -->
+                    <td class="whitespace-nowrap px-3 py-4 text-sm font-mono text-gray-500 dark:text-gray-400">
+                      {{ alumno.id }}
+                    </td>
+                    <!-- Nombre -->
+                    <td class="whitespace-nowrap px-3 py-4 text-sm font-medium text-gray-900 dark:text-white">
+                      {{ alumno.nombre }}
+                    </td>
+                    <!-- CURP -->
+                    <td class="whitespace-nowrap px-3 py-4 text-sm font-mono text-gray-500 dark:text-gray-400">
+                      {{ alumno.curp }}
+                    </td>
+                    <!-- Grado Sugerido -->
+                    <td class="whitespace-nowrap px-3 py-4 text-sm font-medium">
+                      <span class="inline-flex items-center rounded-md bg-purple-100 px-2 py-1 text-xs font-medium text-purple-800 dark:bg-purple-900/30 dark:text-purple-300 ring-1 ring-inset ring-purple-500/10">
+                        {{ getGradoSugerido(alumno.curp) }}
+                      </span>
+                    </td>
+                    <!-- Grupo Asignado -->
+                    <td class="whitespace-nowrap px-3 py-4 text-sm font-medium">
+                      <span v-if="alumno.estatus === 'Baja'" class="inline-flex items-center gap-1 rounded-md bg-red-100 px-2.5 py-1 text-xs font-medium text-red-800 dark:bg-red-900/30 dark:text-red-300 ring-1 ring-inset ring-red-500/10">
+                        Baja
+                      </span>
+                      <span v-else-if="alumno.grupo_grado && alumno.grupo_letra" class="inline-flex items-center gap-1 rounded-md bg-green-100 px-2.5 py-1 text-xs font-medium text-green-800 dark:bg-green-900/30 dark:text-green-300 ring-1 ring-inset ring-green-500/10">
+                        <svg class="h-3.5 w-3.5" fill="none" viewBox="0 0 24 24" stroke-width="2" stroke="currentColor">
+                          <path stroke-linecap="round" stroke-linejoin="round" d="M9 12.75 11.25 15 15 9.75M21 12a9 9 0 1 1-18 0 9 9 0 0 1 18 0Z" />
+                        </svg>
+                        {{ alumno.grupo_grado }}ro {{ alumno.grupo_letra }}
+                      </span>
+                      <span v-else class="text-xs text-gray-400 dark:text-gray-500 italic">
+                        Sin asignar
+                      </span>
+                    </td>
+                    <!-- Acciones -->
+                    <td class="relative whitespace-nowrap py-4 pl-3 pr-4 text-center text-sm font-medium sm:pr-6">
+                      <div class="flex items-center justify-center gap-2">
+                        <!-- Ver perfil -->
+                        <router-link
+                          :to="`/alumnos/${alumno.id}/perfil`"
+                          class="text-blue-600 hover:text-blue-900 dark:text-blue-400 dark:hover:text-blue-300 transition-colors"
+                          title="Ver perfil"
+                        >
+                          <svg class="h-5 w-5" fill="none" viewBox="0 0 24 24" stroke-width="1.5" stroke="currentColor">
+                            <path stroke-linecap="round" stroke-linejoin="round" d="M2.036 12.322a1.012 1.012 0 0 1 0-.639C3.423 7.51 7.36 4.5 12 4.5c4.638 0 8.573 3.007 9.963 7.178.07.207.07.431 0 .639C20.577 16.49 16.64 19.5 12 19.5c-4.638 0-8.573-3.007-9.963-7.178Z" />
+                            <path stroke-linecap="round" stroke-linejoin="round" d="M15 12a3 3 0 1 1-6 0 3 3 0 0 1 6 0Z" />
+                          </svg>
+                        </router-link>
+                        <!-- Editar Rápido -->
+                        <button
+                          v-if="!isDocente && alumno.estatus !== 'Baja'"
+                          @click="openEditModal(alumno)"
+                          class="text-brand-500 hover:text-brand-700 dark:text-brand-400 dark:hover:text-brand-300 transition-colors"
+                          title="Editar"
+                        >
+                          <svg class="h-5 w-5" fill="none" viewBox="0 0 24 24" stroke-width="1.5" stroke="currentColor">
+                            <path stroke-linecap="round" stroke-linejoin="round" d="m16.862 4.487 1.687-1.688a1.875 1.875 0 1 1 2.652 2.652L10.582 16.07a4.5 4.5 0 0 1-1.897 1.13L6 18l.8-2.685a4.5 4.5 0 0 1 1.13-1.897l8.932-8.931Zm0 0L19.5 7.125M18 14v4.75A2.25 2.25 0 0 1 15.75 21H5.25A2.25 2.25 0 0 1 3 18.75V8.25A2.25 2.25 0 0 1 5.25 6H10" />
+                          </svg>
+                        </button>
+                        <!-- Eliminar -->
+                        <button
+                          v-if="!isDocente && alumno.estatus !== 'Baja'"
+                          @click="openDeleteModal(alumno)"
+                          class="text-red-600 hover:text-red-900 dark:text-red-400 dark:hover:text-red-300 transition-colors"
+                          title="Eliminar"
+                        >
+                          <svg class="h-5 w-5" fill="none" viewBox="0 0 24 24" stroke-width="1.5" stroke="currentColor">
+                            <path stroke-linecap="round" stroke-linejoin="round" d="m14.74 9-.346 9m-4.788 0L9.26 9m9.968-3.21c.342.052.682.107 1.022.166m-1.022-.165L18.16 19.673a2.25 2.25 0 0 1-2.244 2.077H8.084a2.25 2.25 0 0 1-2.244-2.077L4.772 5.79m14.456 0a48.108 48.108 0 0 0-3.478-.397m-12 .562c.34-.059.68-.114 1.022-.165m0 0a48.11 48.11 0 0 1 3.478-.397m7.5 0v-.916c0-1.18-.91-2.164-2.09-2.201a51.964 51.964 0 0 0-3.32 0c-1.18.037-2.09 1.022-2.09 2.201v.916m7.5 0a48.667 48.667 0 0 0-7.5 0" />
+                          </svg>
+                        </button>
+                      </div>
+                    </td>
+                  </tr>
+                </tbody>
+              </table>
+
+              <!-- Pie de tabla -->
+              <div class="border-t border-gray-200 dark:border-gray-700 bg-white dark:bg-gray-900 px-4 py-3 sm:px-6">
+                <p class="text-sm text-gray-500 dark:text-gray-400">
+                  Total: <span class="font-medium text-gray-900 dark:text-white">{{ alumnos.length }}</span> alumnos — ordenados alfabéticamente por apellido
+                </p>
+              </div>
+            </div>
           </div>
         </div>
       </div>
     </div>
   </admin-layout>
+
+  <!-- ─── Modal eliminar ─────────────────────────────────────────────────────── -->
+  <Teleport to="body">
+    <div
+      v-if="deleteConfirmOpen"
+      class="fixed inset-0 z-[999999] flex items-center justify-center p-4"
+    >
+      <div class="absolute inset-0 bg-black/50 backdrop-blur-sm" @click="closeDeleteModal"></div>
+      <div class="relative z-10 w-full max-w-sm bg-white dark:bg-gray-900 rounded-2xl shadow-xl border border-gray-200 dark:border-gray-800 p-6">
+        <div class="flex items-center gap-4 mb-4">
+          <div class="h-10 w-10 flex-shrink-0 rounded-full bg-red-100 dark:bg-red-900/30 flex items-center justify-center">
+            <svg class="h-5 w-5 text-red-600 dark:text-red-400" fill="none" viewBox="0 0 24 24" stroke-width="1.5" stroke="currentColor">
+              <path stroke-linecap="round" stroke-linejoin="round" d="M12 9v3.75m-9.303 3.376c-.866 1.5.217 3.374 1.948 3.374h14.71c1.73 0 2.813-1.874 1.948-3.374L13.949 3.378c-.866-1.5-3.032-1.5-3.898 0L2.697 16.126ZM12 15.75h.007v.008H12v-.008Z" />
+            </svg>
+          </div>
+          <div>
+            <h3 class="text-base font-semibold text-gray-900 dark:text-white">Eliminar alumno</h3>
+            <p class="text-sm text-gray-500 dark:text-gray-400">Esta acción no se puede deshacer</p>
+          </div>
+        </div>
+        <p class="text-sm text-gray-600 dark:text-gray-300 mb-6">
+          ¿Estás seguro de que deseas eliminar a
+          <span class="font-semibold text-gray-900 dark:text-white">{{ deleteTarget?.nombre }}</span>?
+        </p>
+        <div class="flex items-center justify-end gap-3">
+          <button @click="closeDeleteModal" class="text-sm font-semibold text-gray-900 dark:text-gray-300 hover:text-gray-500 py-2 px-4 rounded-md transition-colors">
+            Cancelar
+          </button>
+          <button
+            @click="confirmDelete"
+            :disabled="deleting"
+            class="inline-flex items-center gap-2 rounded-md bg-red-600 px-5 py-2 text-sm font-semibold text-white hover:bg-red-500 transition-colors disabled:opacity-60"
+          >
+            <svg v-if="deleting" class="animate-spin h-4 w-4" fill="none" viewBox="0 0 24 24">
+              <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4" />
+              <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8v8z" />
+            </svg>
+            {{ deleting ? "Eliminando..." : "Sí, eliminar" }}
+          </button>
+        </div>
+      </div>
+    </div>
+
+    <!-- Modal Editar -->
+    <div
+      v-if="editModalOpen"
+      class="fixed inset-0 z-[999999] flex items-center justify-center p-4"
+    >
+      <div class="absolute inset-0 bg-black/50 backdrop-blur-sm" @click="closeEditModal"></div>
+      <div class="relative z-10 w-full max-w-md bg-white dark:bg-gray-900 rounded-2xl shadow-xl border border-gray-200 dark:border-gray-800 p-6">
+        <div class="flex items-center gap-4 mb-4">
+          <div class="h-10 w-10 flex-shrink-0 rounded-full bg-brand-100 dark:bg-brand-900/30 flex items-center justify-center">
+            <svg class="h-5 w-5 text-brand-600 dark:text-brand-400" fill="none" viewBox="0 0 24 24" stroke-width="1.5" stroke="currentColor">
+               <path stroke-linecap="round" stroke-linejoin="round" d="m16.862 4.487 1.687-1.688a1.875 1.875 0 1 1 2.652 2.652L10.582 16.07a4.5 4.5 0 0 1-1.897 1.13L6 18l.8-2.685a4.5 4.5 0 0 1 1.13-1.897l8.932-8.931Zm0 0L19.5 7.125M18 14v4.75A2.25 2.25 0 0 1 15.75 21H5.25A2.25 2.25 0 0 1 3 18.75V8.25A2.25 2.25 0 0 1 5.25 6H10" />
+            </svg>
+          </div>
+          <div>
+            <h3 class="text-base font-semibold text-gray-900 dark:text-white">Editar información</h3>
+            <p class="text-sm text-gray-500 dark:text-gray-400">Actualiza los datos del alumno</p>
+          </div>
+        </div>
+        
+        <div v-if="editError" class="mb-4 text-xs font-medium text-red-500 bg-red-50 dark:bg-red-900/10 p-2 rounded-md ring-1 ring-inset ring-red-500/20">
+          {{ editError }}
+        </div>
+
+        <div class="space-y-4 mb-6">
+          <div>
+            <label class="block text-sm font-medium leading-6 text-gray-900 dark:text-gray-200 mb-1">Nombre Completo</label>
+            <input v-model="editForm.nombre" type="text" class="block w-full rounded-md border-0 py-2.5 text-gray-900 shadow-sm ring-1 ring-inset ring-gray-300 placeholder:text-gray-400 focus:ring-2 focus:ring-inset focus:ring-brand-600 sm:text-sm sm:leading-6 dark:bg-gray-800 dark:text-white dark:ring-gray-700 uppercase" />
+          </div>
+          <div>
+            <label class="block text-sm font-medium leading-6 text-gray-900 dark:text-gray-200 mb-1">CURP</label>
+            <input v-model="editForm.curp" type="text" maxlength="18" class="block w-full rounded-md border-0 py-2.5 text-gray-900 shadow-sm ring-1 ring-inset ring-gray-300 placeholder:text-gray-400 focus:ring-2 focus:ring-inset focus:ring-brand-600 sm:text-sm sm:leading-6 dark:bg-gray-800 dark:text-white dark:ring-gray-700 uppercase" />
+          </div>
+        </div>
+
+        <div class="flex items-center justify-end gap-3">
+          <button @click="closeEditModal" class="text-sm font-semibold text-gray-900 dark:text-gray-300 hover:text-gray-500 py-2 px-4 rounded-md transition-colors">
+            Cancelar
+          </button>
+          <button
+            @click="confirmEdit"
+            :disabled="editing"
+            class="inline-flex items-center gap-2 rounded-md bg-brand-600 px-5 py-2 text-sm font-semibold text-white hover:bg-brand-500 transition-colors disabled:opacity-60"
+          >
+            <svg v-if="editing" class="animate-spin h-4 w-4" fill="none" viewBox="0 0 24 24">
+              <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4" />
+              <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8v8z" />
+            </svg>
+            {{ editing ? "Guardando..." : "Guardar Cambios" }}
+          </button>
+        </div>
+      </div>
+    </div>
+
+  </Teleport>
+
+  <!-- ─── Asistente IA modal ─────────────────────────────────────────────────── -->
+  <AsistenteIA v-if="showAsistente" @close="showAsistente = false" @imported="fetchAlumnos" />
 </template>

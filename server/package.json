@@ -1,0 +1,27 @@
+{
+  "name": "educloud-api",
+  "version": "1.0.0",
+  "description": "EduCloud REST API",
+  "main": "index.js",
+  "type": "commonjs",
+  "scripts": {
+    "start": "node index.js",
+    "dev": "nodemon index.js"
+  },
+  "dependencies": {
+    "bcryptjs": "^2.4.3",
+    "cors": "^2.8.5",
+    "dotenv": "^16.4.7",
+    "express": "^4.21.2",
+    "jsonwebtoken": "^9.0.3",
+    "mammoth": "^1.11.0",
+    "multer": "^2.1.1",
+    "openai": "^6.25.0",
+    "pdf-parse": "^2.4.5",
+    "pg": "^8.13.3",
+    "xlsx": "^0.18.5"
+  },
+  "devDependencies": {
+    "nodemon": "^3.1.9"
+  }
+}

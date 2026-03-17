@@ -92,7 +92,10 @@ const date = ref("");
 const flatpickrConfig = {
   mode: "range",
   dateFormat: "M j",
-  defaultDate: [new Date(getLocalTime() - 7 * 24 * 60 * 60 * 1000), new Date(getLocalTime())],
+  defaultDate: [
+    new Date(getLocalTime() - 7 * 24 * 60 * 60 * 1000),
+    new Date(getLocalTime()),
+  ],
 };
 import VueApexCharts from "vue3-apexcharts";
 

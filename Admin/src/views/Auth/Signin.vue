@@ -180,63 +180,31 @@
                         </span>
                       </div>
                     </div>
-                    <!-- Checkbox -->
-                    <div class="flex items-center justify-between">
-                      <div>
-                        <label
-                          for="keepLoggedIn"
-                          class="flex items-center text-sm font-normal text-gray-700 cursor-pointer select-none dark:text-gray-400"
-                        >
-                          <div class="relative">
-                            <input
-                              v-model="keepLoggedIn"
-                              type="checkbox"
-                              id="keepLoggedIn"
-                              class="sr-only"
-                            />
-                            <div
-                              :class="
-                                keepLoggedIn
-                                  ? 'border-brand-500 bg-brand-500'
-                                  : 'bg-transparent border-gray-300 dark:border-gray-700'
-                              "
-                              class="mr-3 flex h-5 w-5 items-center justify-center rounded-md border-[1.25px]"
-                            >
-                              <span :class="keepLoggedIn ? '' : 'opacity-0'">
-                                <svg
-                                  width="14"
-                                  height="14"
-                                  viewBox="0 0 14 14"
-                                  fill="none"
-                                  xmlns="http://www.w3.org/2000/svg"
-                                >
-                                  <path
-                                    d="M11.6666 3.5L5.24992 9.91667L2.33325 7"
-                                    stroke="white"
-                                    stroke-width="1.94437"
-                                    stroke-linecap="round"
-                                    stroke-linejoin="round"
-                                  />
-                                </svg>
-                              </span>
-                            </div>
-                          </div>
-                          Keep me logged in
-                        </label>
-                      </div>
+                    <!-- Error banner -->
+                    <div v-if="errorMsg" class="rounded-lg bg-red-50 dark:bg-red-900/20 border border-red-200 dark:border-red-800 p-3 text-sm text-red-700 dark:text-red-400">
+                      ⚠️ {{ errorMsg }}
+                    </div>
+
+                    <!-- Remember / forgot -->
+                    <div class="flex items-center justify-end">
                       <router-link
                         to="/reset-password"
                         class="text-sm text-brand-500 hover:text-brand-600 dark:text-brand-400"
-                        >Forgot password?</router-link
+                        >¿Olvidaste tu contraseña?</router-link
                       >
                     </div>
-                    <!-- Button -->
+                    <!-- Submit -->
                     <div>
                       <button
                         type="submit"
-                        class="flex items-center justify-center w-full px-4 py-3 text-sm font-medium text-white transition rounded-lg bg-brand-500 shadow-theme-xs hover:bg-brand-600"
+                        :disabled="loading"
+                        class="flex items-center justify-center gap-2 w-full px-4 py-3 text-sm font-medium text-white transition rounded-lg bg-brand-500 shadow-theme-xs hover:bg-brand-600 disabled:opacity-60 disabled:cursor-not-allowed"
                       >
-                        Sign In
+                        <svg v-if="loading" class="animate-spin h-4 w-4" fill="none" viewBox="0 0 24 24">
+                          <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"/>
+                          <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8v8z"/>
+                        </svg>
+                        {{ loading ? 'Iniciando sesión...' : 'Iniciar Sesión' }}
                       </button>
                     </div>
                   </div>
@@ -282,25 +250,42 @@
   </FullScreenLayout>
 </template>
 
-<script setup lang="ts">
+    <script setup lang="ts">
 import { ref } from "vue";
+import { useRouter } from "vue-router";
 import CommonGridShape from "@/components/common/CommonGridShape.vue";
 import FullScreenLayout from "@/components/layout/FullScreenLayout.vue";
-const email = ref("");
-const password = ref("");
+import { useAuth } from "@/composables/useAuth";
+
+const router = useRouter();
+const { login } = useAuth();
+
+const email       = ref("");
+const password    = ref("");
 const showPassword = ref(false);
-const keepLoggedIn = ref(false);
+const errorMsg    = ref<string | null>(null);
+const loading     = ref(false);
 
-const togglePasswordVisibility = () => {
-  showPassword.value = !showPassword.value;
-};
+const togglePasswordVisibility = () => { showPassword.value = !showPassword.value; };
 
-const handleSubmit = () => {
-  // Handle form submission
-  console.log("Form submitted", {
-    email: email.value,
-    password: password.value,
-    keepLoggedIn: keepLoggedIn.value,
-  });
+const handleSubmit = async () => {
+  if (!email.value.trim() || !password.value) {
+    errorMsg.value = "Por favor ingresa tu correo y contraseña.";
+    return;
+  }
+  errorMsg.value = null;
+  loading.value  = true;
+  try {
+    const result = await login(email.value.trim(), password.value);
+    if (!result.ok) {
+      errorMsg.value = result.message ?? "Credenciales inválidas. Verifica tu correo y contraseña.";
+    } else {
+      router.push("/estadisticas");
+    }
+  } catch {
+    errorMsg.value = "Error de conexión con el servidor. Intenta de nuevo.";
+  } finally {
+    loading.value = false;
+  }
 };
 </script>

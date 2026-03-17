@@ -76,41 +76,6 @@
         class="items-center justify-between w-full gap-4 px-5 py-4 shadow-theme-md lg:flex lg:justify-end lg:px-0 lg:shadow-none"
       >
         <div class="flex items-center gap-2 2xsm:gap-3">
-          <div
-            v-if="assignedGroups.length > 0"
-            class="relative group hidden sm:block"
-          >
-            <div
-              class="absolute inset-y-0 left-4 flex items-center pointer-events-none"
-            >
-              <svg
-                class="h-5 w-5 text-gray-500 dark:text-gray-400"
-                fill="none"
-                viewBox="0 0 24 24"
-                stroke-width="1.5"
-                stroke="currentColor"
-              >
-                <path
-                  stroke-linecap="round"
-                  stroke-linejoin="round"
-                  d="M18 18.72a9.094 9.094 0 0 0 3.741-.479 3 3 0 0 0-4.682-2.72m.94 3.198.001.031c0 .225-.012.447-.037.666A11.944 11.944 0 0 1 12 21c-2.17 0-4.207-.576-5.963-1.584A6.062 6.062 0 0 1 6 18.719m12 0a5.971 5.971 0 0 0-.941-3.197m0 0A5.995 5.995 0 0 0 12 12.75a5.995 5.995 0 0 0-5.058 2.772m0 0a3 3 0 0 0-4.681 2.72 8.986 8.986 0 0 0 3.74.477m.94-3.197a5.971 5.971 0 0 0-.94 3.197M15 6.75a3 3 0 1 1-6 0 3 3 0 0 1 6 0Zm6 3a2.25 2.25 0 1 1-4.5 0 2.25 2.25 0 0 1 4.5 0Zm-13.5 0a2.25 2.25 0 1 1-4.5 0 2.25 2.25 0 0 1 4.5 0Z"
-                />
-              </svg>
-            </div>
-            <select
-              v-model="selectedGroupId"
-              class="block w-full min-w-[280px] rounded-lg border-0 py-2.5 pl-11 pr-10 text-gray-900 ring-1 ring-inset ring-gray-300 focus:ring-2 focus:ring-brand-600 text-base font-medium dark:bg-gray-800 dark:text-white dark:ring-gray-700 bg-transparent cursor-pointer hover:bg-gray-50 dark:hover:bg-gray-700/50 transition-colors"
-            >
-              <option disabled value="">Selecciona un grupo</option>
-              <option
-                v-for="group in assignedGroups"
-                :key="group.id"
-                :value="group.id"
-              >
-                {{ group.grado }}ro {{ group.grupo }} - {{ group.materia }}
-              </option>
-            </select>
-          </div>
           <ThemeToggler />
           <NotificationMenu />
         </div>
@@ -127,9 +92,7 @@ import ThemeToggler from "../common/ThemeToggler.vue";
 import HeaderLogo from "./header/HeaderLogo.vue";
 import NotificationMenu from "./header/NotificationMenu.vue";
 import UserMenu from "./header/UserMenu.vue";
-import { useGroupState } from "@/composables/useGroupState";
-
-const { assignedGroups, selectedGroupId } = useGroupState();
+// Imports clean
 
 const { toggleSidebar, toggleMobileSidebar, isMobileOpen } = useSidebar();
 
@@ -140,18 +103,13 @@ const handleToggle = () => {
     toggleMobileSidebar();
   }
 };
-
-const dropdownOpen = ref(false);
-const notifying = ref(false);
-
-const toggleDropdown = () => {
-  dropdownOpen.value = !dropdownOpen.value;
-  notifying.value = false;
-};
+// Removed unused dropdownOpen and notifying variables
 
 const isApplicationMenuOpen = ref(false);
 
 const toggleApplicationMenu = () => {
   isApplicationMenuOpen.value = !isApplicationMenuOpen.value;
 };
+
+// Cleaned up selector functionality
 </script>

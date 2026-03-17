@@ -67,7 +67,7 @@
             <ul class="flex flex-col gap-4">
               <li v-for="(item, index) in menuGroup.items" :key="item.name">
                 <button
-                  v-if="item.subItems"
+                  v-if="(item as any).subItems"
                   @click="toggleSubmenu(groupIndex, index)"
                   :class="[
                     'menu-item group w-full',
@@ -146,7 +146,7 @@
                     "
                   >
                     <ul class="mt-2 space-y-1 ml-9">
-                      <li v-for="subItem in item.subItems" :key="subItem.name">
+                      <li v-for="subItem in (item as any).subItems" :key="subItem.name">
                         <router-link
                           :to="subItem.path"
                           :class="[
@@ -210,12 +210,11 @@
   </aside>
 </template>
 
-<script setup>
-import { ref, computed } from "vue";
+<script setup lang="ts">
+import { computed } from "vue";
 import { useRoute } from "vue-router";
 
 import {
-  GridIcon,
   CalenderIcon,
   UserCircleIcon,
   PieChartIcon,
@@ -224,96 +223,88 @@ import {
   ListIcon,
   TaskIcon,
 } from "../../icons";
-import SidebarWidget from "./SidebarWidget.vue";
 import UserGroupIcon from "@/icons/UserGroupIcon.vue";
-import FolderIcon from "@/icons/FolderIcon.vue";
 import BarChartIcon from "@/icons/BarChartIcon.vue";
 import { useSidebar } from "@/composables/useSidebar";
+import { useAuth } from "@/composables/useAuth";
 
 const route = useRoute();
-
 const { isExpanded, isMobileOpen, isHovered, openSubmenu } = useSidebar();
 
-const menuGroups = [
-  {
-    title: "Principal",
-    items: [
-      {
-        icon: BarChartIcon,
-        name: "Estadísticas",
-        path: "/estadisticas",
-      },
-      {
-        icon: UserCircleIcon,
-        name: "Usuarios",
-        path: "/usuarios",
-      },
-      {
-        icon: ListIcon,
-        name: "Alumnos",
-        path: "/alumnos",
-      },
-      {
-        icon: UserGroupIcon,
-        name: "Grupos",
-        path: "/grupos",
-      },
-      {
-        icon: CalenderIcon,
-        name: "Asistencia y Participación",
-        path: "/asistencia",
-      },
-      {
-        icon: TaskIcon,
-        name: "Evaluación Continua",
-        path: "/tareas",
-      },
-      {
-        icon: PieChartIcon,
-        name: "Evaluaciones",
-        path: "/evaluaciones",
-      },
-    ],
-  },
+// Items principales compartidos/docentes
+const docenteItems = [
+  { icon: CalenderIcon, name: "Agenda",                     path: "/agenda" },
+  { icon: ListIcon,     name: "Planeaciones",               path: "/planeaciones" },
+  { icon: CalenderIcon, name: "Asistencia y Participación", path: "/asistencia" },
+  { icon: TaskIcon,     name: "Evaluación Continua",        path: "/tareas" },
+  { icon: PieChartIcon, name: "Evaluaciones",               path: "/evaluaciones" },
 ];
 
-const isActive = (path) => route.path === path;
+// Items exclusivos de gestión
+const adminItems = [
+  { icon: UserCircleIcon, name: "Usuarios",     path: "/usuarios" },
+  { icon: ListIcon,       name: "Alumnos",      path: "/alumnos" },
+  { icon: UserGroupIcon,  name: "Grupos",       path: "/grupos" },
+];
 
-const toggleSubmenu = (groupIndex, itemIndex) => {
+const menuGroups = computed(() => {
+  const { isAdmin, isSistemas } = useAuth();
+  
+  let mainItems = [...docenteItems];
+  
+  if (isAdmin.value || isSistemas.value) {
+    // Admin y Sistemas ven todo
+    mainItems = [...adminItems, ...mainItems] as any[];
+  }
+  
+  // Añadimos Estadísticas al inicio para todos
+  mainItems.unshift({ icon: BarChartIcon, name: "Estadísticas", path: "/estadisticas" });
+
+  return [{
+    title: "Principal",
+    items: mainItems,
+  }];
+});
+
+
+const isActive = (path: string) => route.path === path;
+
+const toggleSubmenu = (groupIndex: number, itemIndex: number) => {
   const key = `${groupIndex}-${itemIndex}`;
   openSubmenu.value = openSubmenu.value === key ? null : key;
 };
 
 const isAnySubmenuRouteActive = computed(() => {
-  return menuGroups.some((group) =>
+  return menuGroups.value.some((group) =>
     group.items.some(
-      (item) =>
+      (item: any) =>
         item.subItems &&
-        item.subItems.some((subItem) => isActive(subItem.path)),
+        item.subItems.some((subItem: any) => isActive(subItem.path)),
     ),
   );
 });
 
-const isSubmenuOpen = (groupIndex, itemIndex) => {
+const isSubmenuOpen = (groupIndex: number, itemIndex: number) => {
   const key = `${groupIndex}-${itemIndex}`;
   return (
     openSubmenu.value === key ||
     (isAnySubmenuRouteActive.value &&
-      menuGroups[groupIndex].items[itemIndex].subItems?.some((subItem) =>
+      (menuGroups.value[groupIndex].items[itemIndex] as any).subItems?.some((subItem: any) =>
         isActive(subItem.path),
       ))
   );
 };
 
-const startTransition = (el) => {
+
+const startTransition = (el: any) => {
   el.style.height = "auto";
   const height = el.scrollHeight;
   el.style.height = "0px";
-  el.offsetHeight; // force reflow
+  void el.offsetHeight; // force reflow
   el.style.height = height + "px";
 };
 
-const endTransition = (el) => {
+const endTransition = (el: any) => {
   el.style.height = "";
 };
 </script>
